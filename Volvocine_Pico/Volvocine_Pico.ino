@@ -1,3 +1,4 @@
+#include <pico_ota.h>
 #include "pico/unique_id.h"
 #include "agent_id_mapper.h"
 #include <Servo.h>
@@ -497,7 +498,10 @@ void loop() {
   // ポーズ中に一定間隔でパラメータをリクエスト
   if (paused && millis() - lastRequestTime >= 10000) {
     while (WiFi.status() != WL_CONNECTED) {
-      connectToWiFi(ssid, password);
+      while (!connectToAnyWiFi()) {
+        Serial.println("[WiFi] All failed. Retrying...");
+        delay(3000);
+      }
     }
     Serial.println("[INFO] WiFi connected.");
     
