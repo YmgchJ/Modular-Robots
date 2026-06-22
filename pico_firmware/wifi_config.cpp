@@ -1,13 +1,12 @@
+#include <pico_ota.h>
 #include <WiFi.h>
 #include <Arduino.h>
-#include <pico_ota.h>
 
-// ===== WiFiリスト：新しい場所に行ったらここに追加するだけ =====
 struct WiFiCredential { const char* ssid; const char* password; };
 const WiFiCredential wifiList[] = {
-  { "Kura-Station-Ex", "Daruk355"  },
-  //{ "Buffalo-G-4510",  "33354682"  },
-  // { "新しいSSID",   "パスワード" },  ← 追加はここ
+  { "Kura-Station-Ex", "Daruk355" },
+  { "Buffalo-G-4510",  "33354682" },
+  // 追加はここ
 };
 const int wifiCount = sizeof(wifiList) / sizeof(wifiList[0]);
 
@@ -30,11 +29,14 @@ bool connectToAnyWiFi() {
   return false;
 }
 
-// ===== OTA：Core1専用 =====
+// Core1専用：OTA処理（READMEのデュアルコア方式に準拠）
 void setup1() {
-  // WiFi接続完了を待ってからOTA開始
+  // Core0のWiFi接続完了を待つ
   while (WiFi.status() != WL_CONNECTED) delay(100);
-  otaSetup(WiFi.SSID().c_str(), "", "pico-ota", "admin");
+
+  // PICO_OTAライブラリのAPI使用（ssid/passwordは不要、すでに接続済み）
+  otaSetup(wifiList[0].ssid, wifiList[0].password, "pico-ota", "");
+  Serial.println("[OTA] Ready");
 }
 
 void loop1() {
