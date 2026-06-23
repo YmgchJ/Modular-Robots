@@ -1,0 +1,163 @@
+%% analyze_trial.m
+%
+% realtime_monitor.ino から取得したトライアルCSV
+%   (elapsed_sec, angle_deg, flex_raw_adc, current_mA)
+% を読み込み、基本的な可視化・統計・解析を行うMATLABスクリプトです。
+%
+% 使い方:
+%   1. csv_path を解析したいCSVファイルのパスに変更する
+%   2. MATLABでこのスクリプトを実行する (F5 or run)
+%
+% 出力:
+%   - 3段グラフ（サーボ角度・曲げセンサ・電流 vs 時間）
+%   - 電流の移動平均フィルタ後の比較
+%   - 基本統計量（平均・最大・最小・標準偏差）
+%   - 電流のパワースペクトル（周波数解析）
+%   - サーボ駆動周期ごとの平均消費電力・エネルギーの推定
+
+clear; clc; close all;
+
+%% ------------------------------------------------------------
+%% 設定
+%% ------------------------------------------------------------
+csv_path = "trials/trial_20260623_162405.csv";  % ← 解析したいCSVのパスに変更してください
+
+moving_avg_window = 5;       % 電流の移動平均フィルタの窓幅[サンプル数]
+servo_frequency_hz = 1.25;   % ファームウェアのfrequencyHzと合わせる（周期ごとの解析に使用）
+
+%% ------------------------------------------------------------
+%% データ読み込み
+%% ------------------------------------------------------------
+if ~isfile(csv_path)
+    error("CSVファイルが見つかりません: %s", csv_path);
+end
+
+T = readtable(csv_path);
+
+t = T.elapsed_sec;
+angle = T.angle_deg;
+flex = T.flex_raw_adc;
+current = T.current_mA;
+
+n_samples = numel(t);
+duration_sec = t(end) - t(1);
+fprintf("読み込んだサンプル数: %d\n", n_samples);
+fprintf("トライアル時間: %.2f 秒\n", duration_sec);
+
+if n_samples > 1
+    dt_mean = mean(diff(t));
+    fs_est = 1 / dt_mean;
+    fprintf("推定サンプリング周波数: %.2f Hz (理論値50Hzと比較)\n", fs_est);
+else
+    fs_est = 50; % フォールバック
+end
+
+%% ------------------------------------------------------------
+%% 基本統計量
+%% ------------------------------------------------------------
+fprintf("\n--- 基本統計量 ---\n");
+print_stats("Servo angle [deg]", angle);
+print_stats("Flex (raw ADC)", flex);
+print_stats("Current [mA]", current);
+
+%% ------------------------------------------------------------
+%% 電流の移動平均フィルタ
+%% ------------------------------------------------------------
+current_filtered = movmean(current, moving_avg_window);
+
+%% ------------------------------------------------------------
+%% 図1: 3段グラフ（時系列）
+%% ------------------------------------------------------------
+figure('Name', 'Trial Overview', 'NumberTitle', 'off');
+
+subplot(3,1,1);
+plot(t, angle, 'b');
+ylabel('Servo angle [deg]');
+title('Servo angle / Flex sensor (raw) / Current');
+grid on;
+
+subplot(3,1,2);
+plot(t, flex, 'g');
+ylabel('Flex (raw ADC)');
+grid on;
+
+subplot(3,1,3);
+plot(t, current, 'r', 'Color', [1 0.6 0.6]); hold on;
+plot(t, current_filtered, 'r', 'LineWidth', 1.5);
+ylabel('Current [mA]');
+xlabel('Time [s]');
+legend('raw', sprintf('moving avg (window=%d)', moving_avg_window), 'Location', 'best');
+grid on;
+tuneFigure
+%% ------------------------------------------------------------
+%% 図2: 電流のパワースペクトル（周波数解析）
+%% ------------------------------------------------------------
+figure('Name', 'Current Power Spectrum', 'NumberTitle', 'off');
+
+current_detrended = current - mean(current);
+N = length(current_detrended);
+Y = fft(current_detrended);
+P2 = abs(Y / N);
+P1 = P2(1:floor(N/2)+1);
+P1(2:end-1) = 2 * P1(2:end-1);
+f = fs_est * (0:floor(N/2)) / N;
+
+plot(f, P1);
+xlabel('Frequency [Hz]');
+ylabel('|Current amplitude| [mA]');
+title('Current Power Spectrum');
+xlim([0, min(10, fs_est/2)]);  % 0-10Hz付近（サーボ駆動周波数近傍）を見やすく表示
+grid on;
+
+% サーボ駆動周波数の位置に縦線を入れる（基本周波数と高調波の確認用）
+hold on;
+for k = 1:3
+    xline(servo_frequency_hz * k, '--r', sprintf('%dx f_{servo}', k));
+end
+hold off;
+
+%% ------------------------------------------------------------
+%% サーボ駆動周期ごとの平均電流・推定エネルギー
+%% ------------------------------------------------------------
+fprintf("\n--- サーボ駆動周期ごとの解析 ---\n");
+
+period_sec = 1 / servo_frequency_hz;
+n_periods = floor(duration_sec / period_sec);
+
+if n_periods >= 1
+    period_mean_current = nan(n_periods, 1);
+    period_energy_mJ = nan(n_periods, 1);  % 簡易推定: 電圧未知のため電流の時間積分[mA*s]を仮の指標として表示
+
+    for k = 1:n_periods
+        t_start = t(1) + (k-1) * period_sec;
+        t_end = t(1) + k * period_sec;
+        idx = (t >= t_start) & (t < t_end);
+
+        if any(idx)
+            period_mean_current(k) = mean(current(idx));
+            % 台形積分で電流の時間積分を推定 [mA*s]（簡易指標。実際のエネルギーには電圧が必要）
+            period_energy_mJ(k) = trapz(t(idx), current(idx));
+        end
+    end
+
+    figure('Name', 'Per-Cycle Current', 'NumberTitle', 'off');
+    bar(1:n_periods, period_mean_current);
+    xlabel('Servo cycle number');
+    ylabel('Mean current [mA]');
+    title(sprintf('Mean current per servo cycle (period = %.3f s)', period_sec));
+    grid on;
+
+    fprintf("サーボ駆動周期数: %d\n", n_periods);
+    fprintf("周期ごとの平均電流の平均: %.2f mA, 標準偏差: %.2f mA\n", ...
+        mean(period_mean_current, 'omitnan'), std(period_mean_current, 'omitnan'));
+else
+    fprintf("トライアル時間が1周期に満たないため、周期ごとの解析はスキップしました。\n");
+end
+
+%% ------------------------------------------------------------
+%% ヘルパー関数
+%% ------------------------------------------------------------
+function print_stats(label, data)
+    fprintf("%-20s mean=%.3f, min=%.3f, max=%.3f, std=%.3f\n", ...
+        label, mean(data), min(data), max(data), std(data));
+end

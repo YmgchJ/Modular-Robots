@@ -13,8 +13,8 @@
 #include "agent_config.h"
 #include "ServerUtils.h"
 #include "WiFiManager.h"
-#include "wifi_config.h"
 #include "calculateTrimmedMean.h"
+#include "wifi_config.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
